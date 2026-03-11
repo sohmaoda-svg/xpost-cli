@@ -40,8 +40,8 @@ dev = [
 xpost = "xpost_cli:main"
 
 [project.urls]
-Homepage = "https://github.com/sohma/xpost-cli"
-"Bug Tracker" = "https://github.com/sohma/xpost-cli/issues"
+Homepage = "https://github.com/sohmaoda-svg/xpost-cli"
+"Bug Tracker" = "https://github.com/sohmaoda-svg/xpost-cli/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
