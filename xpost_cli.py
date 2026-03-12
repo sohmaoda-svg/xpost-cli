@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 XPost CLI - OpenAI を使って X (Twitter) 投稿文を生成・管理する CLI ツール。
+v0.2.0 以降: Tweepy を使った X (Twitter) API v2 連携をサポート。
 """
 
 import argparse
@@ -11,7 +12,7 @@ import sys
 import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 try:
     from openai import OpenAI
@@ -36,6 +37,13 @@ except ImportError:
     print("Error: rich がインストールされていません。pip install rich>=13.0.0 を実行してください。", file=sys.stderr)
     sys.exit(1)
 
+# Tweepy は任意依存: インポート失敗時も --post 以外の機能は正常動作する
+try:
+    import tweepy  # type: ignore
+    TWEEPY_AVAILABLE: bool = True
+except ImportError:
+    TWEEPY_AVAILABLE = False
+
 # ---------------------------------------------------------------------------
 # 定数
 # ---------------------------------------------------------------------------
@@ -46,7 +54,14 @@ DEFAULT_NUM_VARIANTS = 3
 POSTS_FILE = Path("posts.json")
 
 # 既知のサブコマンド一覧（後方互換処理に使用）
-SUBCOMMANDS = {"generate", "list", "delete", "clear", "export"}
+SUBCOMMANDS = {"generate", "list", "delete", "clear", "export", "post"}
+
+# X API v2 認証情報の環境変数名
+X_ENV_API_KEY = "X_API_KEY"
+X_ENV_API_SECRET = "X_API_SECRET"
+X_ENV_ACCESS_TOKEN = "X_ACCESS_TOKEN"
+X_ENV_ACCESS_TOKEN_SECRET = "X_ACCESS_TOKEN_SECRET"
+X_ENV_BEARER_TOKEN = "X_BEARER_TOKEN"
 
 SYSTEM_PROMPT = textwrap.dedent("""
     あなたはX（Twitter）で数万人のフォロワーを持つカリスマインフルエンサー、兼プロのSNSマーケターです。
@@ -107,6 +122,94 @@ def save_posts(posts: List[dict]) -> None:
             indent=2,
             ensure_ascii=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# X (Twitter) API v2 連携ユーティリティ
+# ---------------------------------------------------------------------------
+
+def create_x_client() -> "tweepy.Client":
+    """環境変数から X API v2 認証情報を読み込み、Tweepy Client を生成して返す。
+
+    Raises:
+        SystemExit: Tweepy が未インストール、または必須の認証情報が不足している場合。
+    """
+    if not TWEEPY_AVAILABLE:
+        console.print(
+            "[red bold]Error:[/red bold] tweepy がインストールされていません。\n"
+            "[bold]pip install tweepy>=4.14.0[/bold] を実行してください。",
+            highlight=False,
+        )
+        sys.exit(1)
+
+    # 必須環境変数をまとめて検証
+    api_key = os.environ.get(X_ENV_API_KEY)
+    api_secret = os.environ.get(X_ENV_API_SECRET)
+    access_token = os.environ.get(X_ENV_ACCESS_TOKEN)
+    access_token_secret = os.environ.get(X_ENV_ACCESS_TOKEN_SECRET)
+    bearer_token = os.environ.get(X_ENV_BEARER_TOKEN)
+
+    missing: List[str] = [
+        name
+        for name, val in [
+            (X_ENV_API_KEY, api_key),
+            (X_ENV_API_SECRET, api_secret),
+            (X_ENV_ACCESS_TOKEN, access_token),
+            (X_ENV_ACCESS_TOKEN_SECRET, access_token_secret),
+        ]
+        if not val
+    ]
+    if missing:
+        console.print(
+            "[red bold]Error:[/red bold] X API 認証情報が不足しています。\n"
+            f"以下の環境変数が見つかりません: [bold]{', '.join(missing)}[/bold]\n"
+            ".env ファイルに設定してください（.env.example を参照）。",
+            highlight=False,
+        )
+        sys.exit(1)
+
+    return tweepy.Client(
+        bearer_token=bearer_token,
+        consumer_key=api_key,
+        consumer_secret=api_secret,
+        access_token=access_token,
+        access_token_secret=access_token_secret,
+    )
+
+
+def post_to_x(text: str) -> Tuple[str, str]:
+    """Tweepy を使って X (Twitter) に投稿し、ツイート ID と URL を返す。
+
+    Args:
+        text: 投稿するテキスト（280文字以内）。
+
+    Returns:
+        (tweet_id, tweet_url) のタプル。
+
+    Raises:
+        SystemExit: 投稿に失敗した場合。
+    """
+    # 文字数チェック（API 呼び出し前にバリデーション）
+    if len(text) > TWITTER_CHAR_LIMIT:
+        console.print(
+            f"[red bold]Error:[/red bold] 投稿文が {TWITTER_CHAR_LIMIT} 文字を超えています"
+            f"（{len(text)} 文字）。",
+            highlight=False,
+        )
+        sys.exit(1)
+
+    x_client = create_x_client()
+
+    try:
+        response = x_client.create_tweet(text=text)
+    except Exception as exc:
+        console.print(f"[red bold]X API エラー:[/red bold] {exc}", highlight=False)
+        sys.exit(1)
+
+    # Tweepy v2 レスポンスからツイート ID を取得
+    tweet_id: str = str(response.data["id"])
+    tweet_url: str = f"https://x.com/i/web/status/{tweet_id}"
+    return tweet_id, tweet_url
 
 
 # ---------------------------------------------------------------------------
@@ -332,10 +435,10 @@ def cmd_generate(args) -> None:
     # posts.json に保存
     existing = load_posts()
     now = datetime.now(timezone.utc)
-    new_records = []
+    new_records: List[dict] = []
     for i, content in enumerate(posts):
         post_id = f"post_{now.strftime('%Y%m%d%H%M%S')}_{i + 1}"
-        record = {
+        record: dict = {
             "id": post_id,
             "topic": args.prompt,
             "tone": args.tone,
@@ -343,6 +446,10 @@ def cmd_generate(args) -> None:
             "content": content,
             "character_count": len(content),
             "created_at": now.isoformat(),
+            "posted": False,
+            "tweet_id": None,
+            "tweet_url": None,
+            "posted_at": None,
         }
         existing.append(record)
         new_records.append(record)
@@ -352,6 +459,150 @@ def cmd_generate(args) -> None:
         console.print(f"[green]✅ {len(new_records)} 件を posts.json に保存しました[/green]")
     except Exception as e:
         console.print(f"[red]保存に失敗しました: {e}[/red]")
+
+    # --post フラグが指定された場合、選択した投稿を X に直接投稿する
+    if getattr(args, "post", False):
+        _post_selected_variant(new_records, existing)
+
+
+# ---------------------------------------------------------------------------
+# 投稿選択 & X 送信ヘルパー
+# ---------------------------------------------------------------------------
+
+def _post_selected_variant(new_records: List[dict], all_posts: List[dict]) -> None:
+    """生成した投稿バリアントからユーザーに選ばせ、X に投稿してレコードを更新する。
+
+    Args:
+        new_records: 今回生成したレコードのリスト（posts.json 未更新 ID を含む）。
+        all_posts: 既存のすべての投稿レコード（更新後に保存する対象）。
+    """
+    if len(new_records) == 1:
+        # バリアントが 1 件の場合は選択をスキップして自動投稿
+        selected = new_records[0]
+    else:
+        # 複数バリアントの場合は番号入力で選択
+        console.print(
+            "\n[bold yellow]どの案を X に投稿しますか？[/bold yellow] "
+            f"番号を入力してください（1〜{len(new_records)}）："
+        )
+        for i, rec in enumerate(new_records, start=1):
+            preview = rec["content"].replace("\n", " ")[:60]
+            console.print(f"  [cyan]{i}.[/cyan] {preview}…")
+
+        while True:
+            choice_str = Prompt.ask("[bold]投稿する案の番号[/bold]")
+            try:
+                choice = int(choice_str)
+                if 1 <= choice <= len(new_records):
+                    break
+            except ValueError:
+                pass
+            console.print(f"[red]1〜{len(new_records)} の数字を入力してください。[/red]")
+
+        selected = new_records[choice - 1]
+
+    # 確認プロンプト
+    console.print(
+        Panel(
+            selected["content"],
+            title="[bold cyan]X に投稿する内容[/bold cyan]",
+            border_style="cyan",
+            padding=(1, 2),
+        )
+    )
+    if not Confirm.ask("[bold green]この内容で X に投稿しますか？[/bold green]", default=True):
+        console.print("[dim]投稿をキャンセルしました。[/dim]")
+        return
+
+    # X API 経由で投稿
+    console.print("[bold green]X に投稿中…[/bold green]")
+    tweet_id, tweet_url = post_to_x(selected["content"])
+
+    # レコードを更新して保存
+    posted_at = datetime.now(timezone.utc).isoformat()
+    for rec in all_posts:
+        if rec.get("id") == selected["id"]:
+            rec["posted"] = True
+            rec["tweet_id"] = tweet_id
+            rec["tweet_url"] = tweet_url
+            rec["posted_at"] = posted_at
+            break
+
+    try:
+        save_posts(all_posts)
+    except Exception as e:
+        console.print(f"[red]保存に失敗しました: {e}[/red]")
+
+    console.print(
+        f"[bold green]✅ X に投稿しました！[/bold green]\n"
+        f"[dim]ツイート ID: {tweet_id}[/dim]\n"
+        f"[bold]URL:[/bold] {tweet_url}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# サブコマンド: post（保存済み投稿を X に送信）
+# ---------------------------------------------------------------------------
+
+def cmd_post(args) -> None:
+    """posts.json に保存済みの投稿を ID 指定で X (Twitter) に投稿する。"""
+    posts = load_posts()
+    target_id: str = args.post_id
+    target = next((p for p in posts if p.get("id") == target_id), None)
+
+    if target is None:
+        console.print(f"[red]ID「{target_id}」の投稿が見つかりませんでした。[/red]")
+        console.print("[dim]ヒント: `xpost list` で ID を確認できます。[/dim]")
+        sys.exit(1)
+
+    # 既投稿チェック
+    if target.get("posted") and not getattr(args, "force", False):
+        console.print(
+            f"[yellow]⚠️  この投稿はすでに X に投稿済みです。[/yellow]\n"
+            f"  ツイート URL: {target.get('tweet_url', '不明')}\n"
+            "再投稿するには [bold]--force[/bold] フラグを付けてください。"
+        )
+        sys.exit(1)
+
+    # 投稿内容を表示して確認
+    console.print(
+        Panel(
+            target["content"],
+            title="[bold cyan]X に投稿する内容[/bold cyan]",
+            border_style="cyan",
+            padding=(1, 2),
+        )
+    )
+
+    if not getattr(args, "force", False):
+        if not Confirm.ask("[bold green]この内容で X に投稿しますか？[/bold green]", default=True):
+            console.print("[dim]投稿をキャンセルしました。[/dim]")
+            return
+
+    # X API 経由で投稿
+    console.print("[bold green]X に投稿中…[/bold green]")
+    tweet_id, tweet_url = post_to_x(target["content"])
+
+    # レコードを更新して保存
+    posted_at = datetime.now(timezone.utc).isoformat()
+    for rec in posts:
+        if rec.get("id") == target_id:
+            rec["posted"] = True
+            rec["tweet_id"] = tweet_id
+            rec["tweet_url"] = tweet_url
+            rec["posted_at"] = posted_at
+            break
+
+    try:
+        save_posts(posts)
+    except Exception as e:
+        console.print(f"[red]保存に失敗しました: {e}[/red]")
+
+    console.print(
+        f"[bold green]✅ X に投稿しました！[/bold green]\n"
+        f"[dim]ツイート ID: {tweet_id}[/dim]\n"
+        f"[bold]URL:[/bold] {tweet_url}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -394,12 +645,15 @@ def cmd_list(args) -> None:
     table.add_column("トピック", min_width=16)
     table.add_column("トーン", min_width=12)
     table.add_column("文字数", justify="right", min_width=6)
+    table.add_column("X投稿", justify="center", min_width=5)
     table.add_column("内容（抜粋）", min_width=36)
     table.add_column("生成日時", min_width=19)
 
     for post in posts_to_show:
         char_count = post.get("character_count", len(post.get("content", "")))
         count_style = "red" if char_count > TWITTER_CHAR_LIMIT else "green"
+        # X 投稿済みフラグを表示
+        posted_mark = "[green]✓[/green]" if post.get("posted") else "[dim]–[/dim]"
         preview = post.get("content", "").replace("\n", " ")
         created = post.get("created_at", "")[:19].replace("T", " ")
         topic_text = post.get("topic", "")
@@ -408,6 +662,7 @@ def cmd_list(args) -> None:
             topic_text[:16] + ("…" if len(topic_text) > 16 else ""),
             post.get("tone", ""),
             f"[{count_style}]{char_count}[/{count_style}]",
+            posted_mark,
             preview[:36] + ("…" if len(preview) > 36 else ""),
             created,
         )
@@ -636,6 +891,8 @@ def build_parser() -> argparse.ArgumentParser:
             使用例:
               xpost "新製品のSaaSをローンチした"
               xpost generate "Pythonのコツ" --tone casual --variants 5
+              xpost generate "AIの未来" --post
+              xpost post post_20240101120000_1
               xpost list --topic "AI" --limit 10
               xpost delete post_20240101120000_1
               xpost clear --force
@@ -677,6 +934,22 @@ def build_parser() -> argparse.ArgumentParser:
                      help="OpenAI API キー。省略時は OPENAI_API_KEY 環境変数を使用。")
     gen.add_argument("--no-char-count", dest="show_char_count", action="store_false", default=True,
                      help="文字数カウントを非表示にする。")
+    gen.add_argument(
+        "--post", dest="post", action="store_true", default=False,
+        help="生成後に選択した投稿を X (Twitter) に直接送信する（要: X API 認証情報）。",
+    )
+
+    # ---- post サブコマンド ----
+    pst = subparsers.add_parser(
+        "post",
+        help="保存済みの投稿を ID 指定で X (Twitter) に送信する。",
+        description="posts.json に保存されている投稿を X API v2 経由で投稿します。",
+    )
+    pst.add_argument("post_id", help="投稿する投稿の ID（`xpost list` で確認可）。")
+    pst.add_argument(
+        "--force", "-f", action="store_true",
+        help="確認プロンプトをスキップ、および既投稿の投稿も再投稿する。",
+    )
 
     # ---- list サブコマンド ----
     lst = subparsers.add_parser("list", help="保存済みの投稿を一覧表示する。")
@@ -722,6 +995,7 @@ def main() -> None:
         "delete": cmd_delete,
         "clear": cmd_clear,
         "export": cmd_export,
+        "post": cmd_post,
     }
 
     handler = dispatch.get(args.command)

@@ -4,7 +4,7 @@ build-backend = "setuptools.backends.legacy:build"
 
 [project]
 name = "xpost-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI-powered X (Twitter) post generator for Japanese creators"
 readme = "README.md"
 license = {text = "MIT"}
@@ -28,6 +28,7 @@ dependencies = [
     "openai>=1.0.0",
     "rich>=13.0.0",
     "python-dotenv>=1.0.0",
+    "tweepy>=4.14.0",
 ]
 
 [project.optional-dependencies]
