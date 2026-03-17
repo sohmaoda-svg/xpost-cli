@@ -1,0 +1,65 @@
+{
+  "topics": [
+    {
+      "prompt": "ValuSmart AI というアプリをリリースしました。複雑な財務データを読み解くお手伝いをするツールです。日々の企業分析に役立ててほしいという開発者の思い。",
+      "tone": "casual"
+    },
+    {
+      "prompt": "米国企業の決算を読む際、初心者が最初に見るべき3つの指標（売上高成長率、営業利益率、自己資本比率）の簡単な紹介",
+      "tone": "educational"
+    },
+    {
+      "prompt": "NVIDIA (NVDA) の最新決算について。データセンター部門の伸びが驚異的であることを客観的に分析した紹介。",
+      "tone": "professional"
+    },
+    {
+      "prompt": "「損益計算書(PL)だけ見て投資するのは危険」という話。貸借対照表(BS)の現金同等物と負債のバランスの重要性。",
+      "tone": "humorous"
+    },
+    {
+      "prompt": "AIエージェントが投資判断の副操縦士(Copilot)になる未来。人間は解釈と決断に集中する。",
+      "tone": "inspirational"
+    },
+    {
+      "prompt": "週末のポートフォリオ見直し。キャッシュ比率をどう保つか、AIのアドバイスを参考に。",
+      "tone": "educational"
+    },
+    {
+      "prompt": "今週の米国株市場振り返り。ハイテク株の調整とAIセクターの強気継続について。",
+      "tone": "professional"
+    },
+    {
+      "prompt": "Apple (AAPL) の自社株買いと配当実績。成熟企業のキャッシュの使い方として最高峰の事例。",
+      "tone": "professional"
+    },
+    {
+      "prompt": "個人開発プロジェクトに『寄付機能』をつけた理由。ユーザーの声が直接開発スピードに繋がる喜び。",
+      "tone": "casual"
+    },
+    {
+      "prompt": "DCF法（収益還元法）の基本。将来のキャッシュを現在の価値に割り引く、本質的な企業価値の測り方。",
+      "tone": "educational"
+    },
+    {
+      "prompt": "Microsoft (MSFT) のクラウド(Azure) × AI戦略。最強のサブスクリプション・モデルの凄み。",
+      "tone": "professional"
+    },
+    {
+      "prompt": "財務三表（PL/BS/CF）の繋がり。利益が出ていても現金がない『黒字倒産』を防ぐ視点。",
+      "tone": "educational"
+    },
+    {
+      "prompt": "ValuSmart AI の今後のアップデート予定。日本株対応への道筋について。",
+      "tone": "inspirational"
+    },
+    {
+      "prompt": "リリースから2週間。多くのフィードバックに感謝。投資をみんなでもっとスマートにしていこう。",
+      "tone": "casual"
+    },
+    {
+      "prompt": "Note記事公開『なぜ個人投資家にAI財務分析が必要なのか？』。情報過多の時代に大切なのは『判断の軸』を持つこと。詳細は記事にて。 https://note.com/valuesmart/n/ndee64008eb3d",
+      "tone": "educational"
+    }
+  ],
+  "last_index": 1
+}
