@@ -33,13 +33,23 @@ except ImportError:
         if not db_url:
             return None
         import psycopg2
+        class CursorWrapper:
+            def __init__(self, cursor):
+                self._cursor = cursor
+            def execute(self, sql, params=None):
+                sql = sql.replace('?', '%s')
+                if params: self._cursor.execute(sql, params)
+                else: self._cursor.execute(sql)
+            def fetchone(self): return self._cursor.fetchone()
+            def fetchall(self): return self._cursor.fetchall()
+            def close(self): self._cursor.close()
+
         class ConnectionWrapper:
             def __init__(self, conn):
                 self._conn = conn
                 self.is_postgres = True
             def cursor(self):
-                from xpost_cli import CursorWrapper
-                return CursorWrapper(self._conn.cursor(), True)
+                return CursorWrapper(self._conn.cursor())
             def commit(self):
                 self._conn.commit()
             def close(self):
