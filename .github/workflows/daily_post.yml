@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install openai tweepy psycopg2-binary schedule
+          pip install openai tweepy psycopg2-binary schedule rich python-dotenv
 
       - name: Run daily poster
         env:
