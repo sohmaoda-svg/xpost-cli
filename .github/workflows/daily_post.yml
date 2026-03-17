@@ -33,4 +33,4 @@ jobs:
           X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          python projects/xpost_cli/daily_poster.py
+          python daily_poster.py

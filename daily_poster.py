@@ -26,9 +26,26 @@ except ImportError as e:
 sys.path.append(str(Path(__file__).parent.parent / "ma-agent"))
 try:
     from modules.db import get_connection
-except ImportError as e:
-    print(f"Warning: modules.db の読込に失敗しました。DB 連携をスキップします: {e}")
-    get_connection = None
+except ImportError:
+    # GitHub Actions 等で ma-agent が無い場合のフォールバック
+    def get_connection():
+        db_url = os.environ.get("DATABASE_URL")
+        if not db_url:
+            return None
+        import psycopg2
+        class ConnectionWrapper:
+            def __init__(self, conn):
+                self._conn = conn
+                self.is_postgres = True
+            def cursor(self):
+                from xpost_cli import CursorWrapper
+                return CursorWrapper(self._conn.cursor(), True)
+            def commit(self):
+                self._conn.commit()
+            def close(self):
+                self._conn.close()
+        conn = psycopg2.connect(db_url, sslmode='prefer')
+        return ConnectionWrapper(conn)
 
 TOPICS_FILE = Path(__file__).parent / "daily_topics.json"
 
