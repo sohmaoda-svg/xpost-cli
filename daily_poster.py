@@ -11,15 +11,12 @@ from pathlib import Path
 from datetime import datetime, timezone
 from openai import OpenAI
 
-# xpost_cli から必要な関数をインポート
-# パスを通す
-sys.path.append(str(Path(__file__).parent))
 try:
     from xpost_cli import generate_posts, post_to_x
-    # 注意: save_posts, load_posts は JSON 用なので DB 版では使用しない可能性がある
-except ImportError as e:
-    print(f"Error: xpost_cli.py の読込に失敗しました: {e}")
-    sys.exit(1)
+except ImportError:
+    # 同一ディレクトリにパスを通す
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from xpost_cli import generate_posts, post_to_x
 
 # modules/db.py から DB 接続をインポート
 # パスを調整 (projects/xpost_cli -> projects/ma-agent)
@@ -76,20 +73,26 @@ def run_daily_post():
         return
 
     # 2. 次のトピックを選択 (ローテーション)
-    # GitHub Actions 等の書き込みが保存されない環境に対応するため、DB のレコード数を元にインデックスを決定する
+    next_index = 0
+    db_success = False
     if get_connection:
         try:
             conn = get_connection()
-            c = conn.cursor()
-            c.execute("SELECT count(*) FROM sns_posts WHERE type = 'auto'")
-            auto_post_count = c.fetchone()[0]
-            next_index = auto_post_count % len(topics)
-            conn.close()
-            print(f"Index determined by DB (count={auto_post_count}): {next_index}")
+            if conn:
+                c = conn.cursor()
+                # postgres なら ? を %s に置換する CursorWrapper を想定しているが、
+                # 直接 SQL を発行する場合は注意。ここでは ma-agent/modules/db.py の仕様に合わせる
+                c.execute("SELECT count(*) FROM sns_posts WHERE type = 'auto'")
+                auto_post_count = c.fetchone()[0]
+                next_index = auto_post_count % len(topics)
+                conn.close()
+                db_success = True
+                print(f"Index determined by DB (count={auto_post_count}): {next_index}")
         except Exception as e:
-            print(f"Warning: DB からのインデックス取得に失敗しました。JSON を使用します: {e}")
-            next_index = (last_index + 1) % len(topics)
-    else:
+            # ログのノイズを減らすため、接続エラーは小さく出す
+            print(f"Note: DB index sync skipped ({e}). Using JSON/Fallback.")
+
+    if not db_success:
         next_index = (last_index + 1) % len(topics)
 
     topic_data = topics[next_index]
