@@ -7,16 +7,19 @@ ValuSmart AI Daily Poster
 import os
 import json
 import sys
+import argparse
 from pathlib import Path
 from datetime import datetime, timezone
 from openai import OpenAI
 
 try:
     from xpost_cli import generate_posts, post_to_x
+    from validator import validate_post
 except ImportError:
     # 同一ディレクトリにパスを通す
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     from xpost_cli import generate_posts, post_to_x
+    from validator import validate_post
 
 # modules/db.py から DB 接続をインポート
 # パスを調整 (projects/xpost_cli -> projects/ma-agent)
@@ -56,7 +59,7 @@ except ImportError:
 
 TOPICS_FILE = Path(__file__).parent / "daily_topics.json"
 
-def run_daily_post():
+def run_daily_post(dry_run: bool = False):
     # 1. トピックの読み込み
     if not TOPICS_FILE.exists():
         print(f"Error: {TOPICS_FILE} が見つかりません。")
@@ -80,8 +83,6 @@ def run_daily_post():
             conn = get_connection()
             if conn:
                 c = conn.cursor()
-                # postgres なら ? を %s に置換する CursorWrapper を想定しているが、
-                # 直接 SQL を発行する場合は注意。ここでは ma-agent/modules/db.py の仕様に合わせる
                 c.execute("SELECT count(*) FROM sns_posts WHERE type = 'auto'")
                 auto_post_count = c.fetchone()[0]
                 next_index = auto_post_count % len(topics)
@@ -89,7 +90,6 @@ def run_daily_post():
                 db_success = True
                 print(f"Index determined by DB (count={auto_post_count}): {next_index}")
         except Exception as e:
-            # ログのノイズを減らすため、接続エラーは小さく出す
             print(f"Note: DB index sync skipped ({e}). Using JSON/Fallback.")
 
     if not db_success:
@@ -109,36 +109,52 @@ def run_daily_post():
     
     client = OpenAI(api_key=api_key)
 
-    # 4. 投稿文の生成
-    try:
-        posts = generate_posts(
-            client=client,
-            prompt=topic_data["prompt"],
-            tone=topic_data["tone"],
-            num_variants=1,
-            include_hashtags=False,
-            include_emojis=False,
-            additional_context="【重要】Xのスパムフィルター回避のため、「投資」「革命」「絶対」「稼ぐ」などの過激な金融系煽り文句は一切使用しないでください。日常の気づきのような、人間らしく落ち着いたトーンで自然に語ってください。",
-            model="gpt-4o-mini"
-        )
-        if not posts:
-            print("Error: 投稿文の生成に失敗しました。")
-            return
-        
-        content = posts[0]
-        print(f"Generated Content:\n{content}")
-    except Exception as e:
-        print(f"Error (Generation): {e}")
+    # 4. 投稿文の生成とバリデーション (最大3回試行)
+    content = None
+    ng_words_path = str(Path(__file__).parent.parent.parent / "threads-ops" / "data" / "knowledge" / "ng_words.json")
+    
+    for attempt in range(3):
+        try:
+            posts = generate_posts(
+                client=client,
+                prompt=topic_data["prompt"],
+                tone=topic_data["tone"],
+                num_variants=1,
+                include_hashtags=False,
+                include_emojis=False,
+                additional_context="【重要】Xのスパムフィルター回避のため、「投資」「革命」「絶対」「稼ぐ」などの過激な金融系煽り文句は一切使用しないでください。日常の気づきのような、人間らしく落ち着いたトーンで自然に語ってください。",
+                model="gpt-4o-mini"
+            )
+            if not posts:
+                print(f"Attempt {attempt+1}: 投稿文の生成に失敗しました。")
+                continue
+            
+            temp_content = posts[0]
+            passed, errors = validate_post(temp_content, ng_words_path=ng_words_path)
+            
+            if passed:
+                content = temp_content
+                print(f"Generated Content (Passed Validation):\n{content}")
+                break
+            else:
+                print(f"Attempt {attempt+1}: バリデーション失敗: {', '.join(errors)}")
+        except Exception as e:
+            print(f"Error (Generation Attempt {attempt+1}): {e}")
+
+    if not content:
+        print("Error: 3回の試行後もバリデーションを通過する投稿文を生成できませんでした。")
         return
 
     # 5. X への投稿
     try:
-        tweet_id, tweet_url = post_to_x(content)
-        print(f"Successfully posted to X! URL: {tweet_url}")
+        tweet_id, tweet_url = post_to_x(content, dry_run=dry_run)
+        if dry_run:
+            print(f"[DRY RUN] Would have posted to X! Content: {content}")
+            tweet_id, tweet_url = "dry_run_id", "https://x.com/dry_run"
+        else:
+            print(f"Successfully posted to X! URL: {tweet_url}")
     except Exception as e:
         print(f"Error (X Posting): {e}")
-        # 投稿失敗時はインデックスを更新せずに終了するか検討が必要だが、
-        # ここではログを出力して終了する
         return
 
     # 6. ステータスの更新と保存
@@ -180,4 +196,8 @@ def run_daily_post():
         print("Warning: get_connection が利用できないため DB 保存をスキップしました。")
 
 if __name__ == "__main__":
-    run_daily_post()
+    parser = argparse.ArgumentParser(description="ValuSmart AI Daily Poster")
+    parser.add_argument("--dry-run", action="store_true", help="実際に投稿せずにシミュレーションを行う")
+    args = parser.parse_args()
+    
+    run_daily_post(dry_run=args.dry_run)

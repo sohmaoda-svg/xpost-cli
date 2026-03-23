@@ -22,7 +22,7 @@ except ImportError:
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(override=True)
 except ImportError:
     # python-dotenv は任意依存
     pass
@@ -169,7 +169,6 @@ def create_x_client() -> "tweepy.Client":
         sys.exit(1)
 
     return tweepy.Client(
-        bearer_token=bearer_token,
         consumer_key=api_key,
         consumer_secret=api_secret,
         access_token=access_token,
@@ -177,11 +176,12 @@ def create_x_client() -> "tweepy.Client":
     )
 
 
-def post_to_x(text: str) -> Tuple[str, str]:
+def post_to_x(text: str, dry_run: bool = False) -> Tuple[str, str]:
     """Tweepy を使って X (Twitter) に投稿し、ツイート ID と URL を返す。
 
     Args:
         text: 投稿するテキスト（280文字以内）。
+        dry_run: True の場合、実際の API 呼び出しを行わずにシミュレーションする。
 
     Returns:
         (tweet_id, tweet_url) のタプル。
@@ -198,15 +198,30 @@ def post_to_x(text: str) -> Tuple[str, str]:
         )
         sys.exit(1)
 
+    if dry_run:
+        console.print("[yellow][DRY RUN][/yellow] X への投稿をスキップしました（dry-run モード）。")
+        return "mock_id_dry_run", "https://x.com/mock_status_dry_run"
+
     x_client = create_x_client()
 
     try:
         response = x_client.create_tweet(text=text)
     except Exception as exc:
-        console.print(f"[red bold]X API エラー:[/red bold] {exc}", highlight=False)
+        msg = str(exc)
+        if "403" in msg:
+            console.print(f"[red bold]X API エラー (403 Forbidden):[/red bold] {exc}", highlight=False)
+            console.print("[yellow]ヒント:[/yellow] 以下の可能性があります：")
+            console.print("  1. App の権限が 'Read and write' になっていない")
+            console.print("  2. API キーまたはトークンが古い or 無効")
+            console.print("  3. 投稿内容がスパムフィルター（NG語等）に抵触した")
+            console.print("  4. 24時間の投稿制限（Free Tier: 50件程度）に達した")
+        elif "429" in msg or "Rate limit" in msg:
+            console.print(f"[red bold]X API エラー (429 Rate Limit):[/red bold] {exc}", highlight=False)
+        else:
+            console.print(f"[red bold]X API エラー:[/red bold] {exc}", highlight=False)
         sys.exit(1)
 
-    # Tweepy v2 レスポンスからツイート ID を取得
+    # Tweepy v2 レンスポンスからツイート ID を取得
     tweet_id: str = str(response.data["id"])
     tweet_url: str = f"https://x.com/i/web/status/{tweet_id}"
     return tweet_id, tweet_url
@@ -462,19 +477,20 @@ def cmd_generate(args) -> None:
 
     # --post フラグが指定された場合、選択した投稿を X に直接投稿する
     if getattr(args, "post", False):
-        _post_selected_variant(new_records, existing)
+        _post_selected_variant(new_records, existing, dry_run=getattr(args, "dry_run", False))
 
 
 # ---------------------------------------------------------------------------
 # 投稿選択 & X 送信ヘルパー
 # ---------------------------------------------------------------------------
 
-def _post_selected_variant(new_records: List[dict], all_posts: List[dict]) -> None:
+def _post_selected_variant(new_records: List[dict], all_posts: List[dict], dry_run: bool = False) -> None:
     """生成した投稿バリアントからユーザーに選ばせ、X に投稿してレコードを更新する。
 
     Args:
         new_records: 今回生成したレコードのリスト（posts.json 未更新 ID を含む）。
         all_posts: 既存のすべての投稿レコード（更新後に保存する対象）。
+        dry_run: API 呼び出しをスキップするかどうか。
     """
     if len(new_records) == 1:
         # バリアントが 1 件の場合は選択をスキップして自動投稿
@@ -516,22 +532,25 @@ def _post_selected_variant(new_records: List[dict], all_posts: List[dict]) -> No
 
     # X API 経由で投稿
     console.print("[bold green]X に投稿中…[/bold green]")
-    tweet_id, tweet_url = post_to_x(selected["content"])
+    tweet_id, tweet_url = post_to_x(selected["content"], dry_run=dry_run)
 
-    # レコードを更新して保存
-    posted_at = datetime.now(timezone.utc).isoformat()
-    for rec in all_posts:
-        if rec.get("id") == selected["id"]:
-            rec["posted"] = True
-            rec["tweet_id"] = tweet_id
-            rec["tweet_url"] = tweet_url
-            rec["posted_at"] = posted_at
-            break
+    # レコードを更新して保存（dry_run の場合はスキップ）
+    if not dry_run:
+        posted_at = datetime.now(timezone.utc).isoformat()
+        for rec in all_posts:
+            if rec.get("id") == selected["id"]:
+                rec["posted"] = True
+                rec["tweet_id"] = tweet_id
+                rec["tweet_url"] = tweet_url
+                rec["posted_at"] = posted_at
+                break
 
-    try:
-        save_posts(all_posts)
-    except Exception as e:
-        console.print(f"[red]保存に失敗しました: {e}[/red]")
+        try:
+            save_posts(all_posts)
+        except Exception as e:
+            console.print(f"[red]保存に失敗しました: {e}[/red]")
+    else:
+        console.print("[yellow][DRY RUN][/yellow] 投稿ステータスの更新をスキップしました。")
 
     console.print(
         f"[bold green]✅ X に投稿しました！[/bold green]\n"
@@ -581,22 +600,25 @@ def cmd_post(args) -> None:
 
     # X API 経由で投稿
     console.print("[bold green]X に投稿中…[/bold green]")
-    tweet_id, tweet_url = post_to_x(target["content"])
+    tweet_id, tweet_url = post_to_x(target["content"], dry_run=getattr(args, "dry_run", False))
 
-    # レコードを更新して保存
-    posted_at = datetime.now(timezone.utc).isoformat()
-    for rec in posts:
-        if rec.get("id") == target_id:
-            rec["posted"] = True
-            rec["tweet_id"] = tweet_id
-            rec["tweet_url"] = tweet_url
-            rec["posted_at"] = posted_at
-            break
+    # レコードを更新して保存（dry_run の場合はスキップ）
+    if not getattr(args, "dry_run", False):
+        posted_at = datetime.now(timezone.utc).isoformat()
+        for rec in posts:
+            if rec.get("id") == target_id:
+                rec["posted"] = True
+                rec["tweet_id"] = tweet_id
+                rec["tweet_url"] = tweet_url
+                rec["posted_at"] = posted_at
+                break
 
-    try:
-        save_posts(posts)
-    except Exception as e:
-        console.print(f"[red]保存に失敗しました: {e}[/red]")
+        try:
+            save_posts(posts)
+        except Exception as e:
+            console.print(f"[red]保存に失敗しました: {e}[/red]")
+    else:
+        console.print("[yellow][DRY RUN][/yellow] 投稿ステータスの更新をスキップしました。")
 
     console.print(
         f"[bold green]✅ X に投稿しました！[/bold green]\n"
@@ -938,6 +960,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--post", dest="post", action="store_true", default=False,
         help="生成後に選択した投稿を X (Twitter) に直接送信する（要: X API 認証情報）。",
     )
+    gen.add_argument("--dry-run", action="store_true", help="実際の API 呼び出しを行わずに投稿シミュレーションを行う。")
 
     # ---- post サブコマンド ----
     pst = subparsers.add_parser(
@@ -950,6 +973,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", "-f", action="store_true",
         help="確認プロンプトをスキップ、および既投稿の投稿も再投稿する。",
     )
+    pst.add_argument("--dry-run", action="store_true", help="実際の API 呼び出しを行わずに投稿シミュレーションを行う。")
 
     # ---- list サブコマンド ----
     lst = subparsers.add_parser("list", help="保存済みの投稿を一覧表示する。")
